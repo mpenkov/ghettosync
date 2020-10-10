@@ -56,9 +56,25 @@ def scan(source: str) -> Iterator[Tuple[str, int]]:
 
 
 def print_buffer(cache: Dict, destination: str) -> None:
+    #
+    # Scan the destination instead of checking each artist/album later with
+    # isdir - that's slow when the source contains a lot of music.
+    #
+    destdirs = set()
+    try:
+        for top in os.scandir(destination):
+            if top.is_dir():
+                for bottom in os.scandir(top.path):
+                    if bottom.is_dir():
+                        destdirs.add(os.path.join(top.name, bottom.name))
+    except FileNotFoundError:
+        #
+        # If the destination does not exist at all.
+        #
+        pass
+
     for x in cache['subdirs']:
-        bottomdir_dest = os.path.join(destination, x['relpath'])
-        bottomdir_check = 'x' if os.path.isdir(bottomdir_dest) else ' '
+        bottomdir_check = 'x' if x['relpath'] in destdirs else ' '
         print('[%s] (% 6d MB) %s' % (bottomdir_check, x['sizemb'], x['relpath']))
 
 
@@ -88,10 +104,12 @@ def add(source_dir, dest_dir, to_add):
 def remove(root_path, to_remove):
     for relpath in to_remove:
         dest_path = os.path.join(root_path, relpath)
+        assert dest_path.startswith(args.destination)
         print('rm -rf %r' % dest_path)
         shutil.rmtree(dest_path)
 
         parent_path = os.path.dirname(dest_path)
+        assert parent_path.startswith(args.destination)
         if not os.listdir(parent_path):
             os.rmdir(parent_path)
             print('rm -rf %r' % parent_path)
@@ -99,10 +117,13 @@ def remove(root_path, to_remove):
 
 cache_name = 'ghettosync.json'
 
-with open(cache_name) as fin:
-    cache = json.load(fin)
+try:
+    with open(cache_name) as fin:
+        cache = json.load(fin)
+except FileNotFoundError:
+    cache = {}
 
-if cache['source'] != args.source:
+if cache.get('source') != args.source:
     #
     # Cache is invalid, repopulate.
     #
