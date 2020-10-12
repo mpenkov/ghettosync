@@ -26,6 +26,7 @@ EXTENSIONS = (
 parser = argparse.ArgumentParser()
 parser.add_argument('source')
 parser.add_argument('destination')
+parser.add_argument('--cleanup', action='store_true')
 args = parser.parse_args()
 
 myfs = fs.open_fs(args.source)
@@ -55,7 +56,7 @@ def scan(source: str) -> Iterator[Tuple[str, int]]:
             yield relpath, getsize(relpath)
 
 
-def print_buffer(cache: Dict, destination: str) -> None:
+def print_buffer(cache: Dict, destination: str) -> Iterator[str]:
     #
     # Scan the destination instead of checking each artist/album later with
     # isdir - that's slow when the source contains a lot of music.
@@ -74,8 +75,12 @@ def print_buffer(cache: Dict, destination: str) -> None:
         pass
 
     for x in cache['subdirs']:
+        if args.cleanup and x['relpath'] not in destdirs:
+            continue
+
         bottomdir_check = 'x' if x['relpath'] in destdirs else ' '
         print('[%s] (% 6d MB) %s' % (bottomdir_check, x['sizemb'], x['relpath']))
+        yield x['relpath']
 
 
 def read_buffer(fin: IO[str]) -> Iterator[str]:
@@ -140,20 +145,19 @@ if cache.get('source') != args.source:
 fname = 'ghettosync.tmp'
 with open(fname, 'w') as fout:
     with contextlib.redirect_stdout(fout):
-        print_buffer(cache, args.destination)
+        subdirs = list(print_buffer(cache, args.destination))
 
 subprocess.check_call([os.environ.get('EDITOR', 'vim'), fname])
 
 with open(fname, 'r') as fin:
     lines = list(read_buffer(fin))
 
-assert len(lines) == len(cache['subdirs']), 'number of lines has changed'
+assert len(lines) == len(subdirs), 'number of lines has changed'
 
 to_remove = []
 to_add = []
 
-for line, subdir in zip(lines, cache['subdirs']):
-    relpath = subdir['relpath']
+for line, relpath in zip(lines, subdirs):
     source_path = os.path.join(args.source, relpath)
     dest_path = os.path.join(args.destination, relpath)
     dest_exists = os.path.isdir(dest_path)
@@ -170,5 +174,12 @@ for line, subdir in zip(lines, cache['subdirs']):
 # - rollback after incomplete directory copy
 # - parallelize copying
 #
-remove(args.destination, to_remove)
+if to_remove:
+    print('The following subdirectories will be removed:')
+    for x in to_remove:
+        print(x)
+    print('Is this OK? yes / [no]')
+    if input().lower() in ('y', 'yes'):
+        remove(args.destination, to_remove)
+
 add(args.source, args.destination, to_add)
