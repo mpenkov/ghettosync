@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import unicodedata
 
 import fs
 
@@ -32,6 +33,28 @@ args = parser.parse_args()
 myfs = fs.open_fs(args.source)
 
 
+#
+# Scan the destination instead of checking each artist/album later with
+# isdir - that's slow when the source contains a lot of music.
+#
+destdirs = set()
+try:
+    for top in os.scandir(args.destination):
+        if top.is_dir():
+            for bottom in os.scandir(top.path):
+                if bottom.is_dir():
+                    #
+                    # Some devices do weird things to Unicode pathnames.
+                    #
+                    relpath = os.path.join(top.name, bottom.name)
+                    destdirs.add(unicodedata.normalize('NFC', relpath))
+except FileNotFoundError:
+    #
+    # If the destination does not exist at all.
+    #
+    pass
+
+
 def getsize(dirpath: str) -> int:
     #
     # ignores subdirectories entirely
@@ -53,27 +76,10 @@ def scan(source: str) -> Iterator[Tuple[str, int]]:
                 continue
 
             relpath = os.path.join(topdir.name, bottomdir.name)
-            yield relpath, getsize(relpath)
+            yield unicodedata.normalize('NFC', relpath), getsize(relpath)
 
 
 def print_buffer(cache: Dict, destination: str) -> Iterator[str]:
-    #
-    # Scan the destination instead of checking each artist/album later with
-    # isdir - that's slow when the source contains a lot of music.
-    #
-    destdirs = set()
-    try:
-        for top in os.scandir(destination):
-            if top.is_dir():
-                for bottom in os.scandir(top.path):
-                    if bottom.is_dir():
-                        destdirs.add(os.path.join(top.name, bottom.name))
-    except FileNotFoundError:
-        #
-        # If the destination does not exist at all.
-        #
-        pass
-
     for x in cache['subdirs']:
         if args.cleanup and x['relpath'] not in destdirs:
             continue
@@ -161,7 +167,7 @@ for line, relpath in zip(lines, subdirs):
     source_path = os.path.join(args.source, relpath)
     dest_path = os.path.join(args.destination, relpath)
     dest_exists = os.path.isdir(dest_path)
-    if dest_exists and line.startswith('[ ]'):
+    if relpath in destdirs and line.startswith('[ ]'):
         to_remove.append(relpath)
     elif not dest_exists and line.startswith('[x]'):
         to_add.append(relpath)
