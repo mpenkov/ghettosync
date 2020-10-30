@@ -1,6 +1,7 @@
 import argparse
 import contextlib
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -28,7 +29,11 @@ parser = argparse.ArgumentParser()
 parser.add_argument('source')
 parser.add_argument('destination')
 parser.add_argument('--cleanup', action='store_true')
+parser.add_argument('--loglevel', default=logging.INFO)
 args = parser.parse_args()
+
+logging.basicConfig(level=args.loglevel)
+logging.getLogger('paramiko.transport').setLevel(logging.ERROR)
 
 myfs = fs.open_fs(args.source)
 
@@ -47,7 +52,7 @@ try:
                     # Some devices do weird things to Unicode pathnames.
                     #
                     relpath = os.path.join(top.name, bottom.name)
-                    destdirs.add(unicodedata.normalize('NFC', relpath))
+                    destdirs.add(relpath)
 except FileNotFoundError:
     #
     # If the destination does not exist at all.
@@ -76,15 +81,17 @@ def scan(source: str) -> Iterator[Tuple[str, int]]:
                 continue
 
             relpath = os.path.join(topdir.name, bottomdir.name)
-            yield unicodedata.normalize('NFC', relpath), getsize(relpath)
+            yield relpath, getsize(relpath)
 
 
 def print_buffer(cache: Dict, destination: str) -> Iterator[str]:
+    normdestdirs = {unicodedata.normalize('NFC', d) for d in destdirs}
     for x in cache['subdirs']:
-        if args.cleanup and x['relpath'] not in destdirs:
+        exists_in_dest = unicodedata.normalize('NFC', x['relpath']) in normdestdirs
+        if args.cleanup and not exists_in_dest:
             continue
 
-        bottomdir_check = 'x' if x['relpath'] in destdirs else ' '
+        bottomdir_check = 'x' if exists_in_dest else ' '
         print('[%s] (% 6d MB) %s' % (bottomdir_check, x['sizemb'], x['relpath']))
         yield x['relpath']
 
@@ -100,13 +107,19 @@ def add(source_dir, dest_dir, to_add):
     for relpath in to_add:
         dest_path = os.path.join(args.destination, relpath)
         os.makedirs(dest_path, exist_ok=True)
-        for f in sorted(myfs.listdir(relpath)):
+        try:
+            contents = myfs.listdir(relpath)
+        except Exception as err:
+            logging.error('unable to copy: %r err: %r', relpath, err)
+            continue
+
+        for f in sorted(contents):
             name, ext = os.path.splitext(f)
             if f.startswith('._') or ext.lower() not in EXTENSIONS:
                 continue
             copyfrom = os.path.join(relpath, f)
             copyto = os.path.join(dest_path, f)
-            print('cp %r %r' % (copyfrom, copyto))
+            logging.info('cp %r %r', copyfrom, copyto)
 
             with open(copyto, 'wb') as fout:
                 myfs.download(copyfrom, fout)
